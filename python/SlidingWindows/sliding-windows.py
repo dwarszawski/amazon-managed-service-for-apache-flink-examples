@@ -56,15 +56,20 @@ def property_map(props, property_group_id):
         if prop["PropertyGroupId"] == property_group_id:
             return prop["PropertyMap"]
 
-
 def create_input_table(table_name, stream_name, region, stream_initpos):
     return """ CREATE TABLE {0} (
-                ticker VARCHAR(6),
-                price DOUBLE,
+                review_id VARCHAR(255),
+                reviewer VARCHAR(255),
+                movie VARCHAR(255),
+                rating VARCHAR(255),
+                review_summary VARCHAR(255),
+                review_date VARCHAR(255),
+                spoiler_tag INT,
+                review_detail VARCHAR(2000),
                 event_time TIMESTAMP(3),
                 WATERMARK FOR event_time AS event_time - INTERVAL '5' SECOND
               )
-              PARTITIONED BY (ticker)
+              PARTITIONED BY (reviewer)
               WITH (
                 'connector' = 'kinesis',
                 'stream' = '{1}',
@@ -76,11 +81,11 @@ def create_input_table(table_name, stream_name, region, stream_initpos):
 
 def create_output_table(table_name, stream_name, region):
     return """ CREATE TABLE {0} (
-                ticker VARCHAR(6),
-                price DOUBLE,
+                reviewer VARCHAR(255),
+                movie_count BIGINT,
                 event_time VARCHAR(64)
               )
-              PARTITIONED BY (ticker)
+              PARTITIONED BY (reviewer)
               WITH (
                 'connector' = 'kinesis',
                 'stream' = '{1}',
@@ -97,13 +102,14 @@ def perform_sliding_window_aggregation(input_table_name):
     sliding_window_table = (
         input_table
             .window(
-                Slide.over("10.seconds")
-                .every("5.seconds")
+                Slide.over("1.minutes")
+                .every("30.seconds")
                 .on("event_time")
-                .alias("ten_second_window")
+                .alias("one_minute_window")
             )
-            .group_by("ticker, ten_second_window")
-            .select("ticker, price.min as price, to_string(ten_second_window.end) as event_time")
+            .group_by("reviewer, one_minute_window")
+            .select("reviewer, movie.count as movie_count, to_string(one_minute_window.end) as event_time")
+            .where("movie_count > 1")
     )
 
     return sliding_window_table
@@ -157,7 +163,7 @@ def main():
     table_env.create_temporary_view("sliding_window_table", sliding_window_table)
 
     # 5. These sliding windows are inserted into the sink table
-    table_result1 = table_env.execute_sql("INSERT INTO {0} SELECT * FROM {1}"
+    table_result1 = table_env.execute_sql("INSERT INTO {0} SELECT reviewer, movie_count, event_time FROM {1}"
                                           .format(output_table_name, "sliding_window_table"))
 
 
